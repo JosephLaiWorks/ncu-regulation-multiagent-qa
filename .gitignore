@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+
+# HuggingFace model cache
+hf_model_cache/
+
+# Auto-generated test results
+auto_test_a5_results.json
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
