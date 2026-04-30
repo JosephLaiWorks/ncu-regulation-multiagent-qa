@@ -1,7 +1,6 @@
 # Assignment 5: KG Multi-Agent QA System
 
 **Course**: NCU — Knowledge Graph & QA Systems  
-**Deadline**: 2026/5/7  
 **Extension of**: Assignment 4 — NCU Regulation KG Q&A System
 
 ---
