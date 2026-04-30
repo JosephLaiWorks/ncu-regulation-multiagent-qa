@@ -233,22 +233,24 @@ All return the same dict:
 ## 8. Screenshots
 
 ### 8.1 auto_test_a5.py Final Result
-*(insert screenshot here)*
+![Final Result](images/A5result.jpg)
 
 ### 8.2 KG Structure Overview (from A4)
-*(insert Neo4j Browser screenshot showing Regulation → Article → Rule)*
+![KG Structure Overview](images/KG-struct-overall.jpg)
 
 ### 8.3 Article and Rule Node Counts (from A4)
-*(insert screenshot)*
+![Article and Rule Node Counts](images/article-number.jpg)
+![Article and Rule Node Counts](images/rule-number.jpg)
+![Article and Rule Node Counts](images/contain_row-number.jpg)
 
 ### 8.4 Multi-Agent QA — Normal Question Example
-*(insert screenshot of query_system_multiagent.py answering a regulation question)*
+![Multi-Agent QA](images/Normal question.jpg)
 
 ### 8.5 Multi-Agent QA — Unsafe Question Rejected
-*(insert screenshot showing safety_decision: REJECT)*
+![Unsafe Question](images/UnsafeQ.jpg)
 
 ### 8.6 Multi-Agent QA — Repair Triggered
-*(insert screenshot showing repair_attempted: True)*
+![Repair Triggered](images/Repair.jpg)
 
 ---
 
