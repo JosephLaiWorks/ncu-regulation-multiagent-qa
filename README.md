@@ -244,7 +244,7 @@ All return the same dict:
 ![Article and Rule Node Counts](images/contain_row-number.jpg)
 
 ### 8.4 Multi-Agent QA — Normal Question Example
-![Multi-Agent QA](images/Normal question.jpg)
+![Multi-Agent QA](images/Normal-question.jpg)
 
 ### 8.5 Multi-Agent QA — Unsafe Question Rejected
 ![Unsafe Question](images/UnsafeQ.jpg)
