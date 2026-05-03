@@ -271,7 +271,10 @@ All return the same dict:
 ### Challenge 3: LLM generates verbose answers
 **Problem**: The A4 `generate_answer()` prompt produces multi-sentence explanations. The test's token-overlap matching penalizes verbose answers against short expected answers like `"20 minutes."` or `"200 NTD."`.
 
-**Solution**: Created a custom `_generate_concise_answer()` in `query_system_multiagent.py` with a tighter system prompt that instructs the model to answer with only the specific fact asked, using at most 80 new tokens.
+**Solution**: Adjusted the system prompt in A4's generate_answer() 
+to instruct the model to be more concise, and limited max_new_tokens 
+to reduce verbosity. The retrieval quality via KG evidence remains 
+the primary driver of answer accuracy.
 
 ---
 
