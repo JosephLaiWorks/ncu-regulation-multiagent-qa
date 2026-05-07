@@ -231,7 +231,7 @@ All return the same dict:
 ## 8. Screenshots
 
 ### 8.1 auto_test_a5.py Final Result
-![Final Result](auto-test-result.jpg)
+![Final Result](images/auto-test-result.jpg)
 
 ### 8.2 KG Structure Overview (from A4)
 ![KG Structure Overview](images/KG-struct-overall.jpg)
