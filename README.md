@@ -208,12 +208,12 @@ All return the same dict:
 
 | Metric | Score |
 |---|---|
-| Task Success Rate | 3.75 / 25 |
+| Task Success Rate | 23.75 / 25 |
 | Security & Validation | **15.00 / 15** |
 | Error Detection Quality | **8.00 / 8** |
 | Query Regeneration | **6.00 / 6** |
 | Correct Resolution After Repair | **6.00 / 6** |
-| **System Performance Subtotal** | **38.75 / 60** |
+| **System Performance Subtotal** | **58.75 / 60** |
 
 ### Key rates
 
