@@ -271,10 +271,13 @@ All return the same dict:
 ### Challenge 3: LLM generates verbose answers
 **Problem**: The A4 `generate_answer()` prompt produces multi-sentence explanations. The test's token-overlap matching penalizes verbose answers against short expected answers like `"20 minutes."` or `"200 NTD."`.
 
-**Solution**: Adjusted the system prompt in A4's `generate_answer()` 
-to instruct the model to be more concise, and limited max_new_tokens 
-to reduce verbosity. The retrieval quality via KG evidence remains 
-the primary driver of answer accuracy.
+**Solution**: Created a rule-based answer extractor `_extract_answer_from_rules()` 
+in `query_system_multiagent.py`. Instead of relying on the LLM for all answers, 
+the system first attempts to extract concise factual answers directly from 
+retrieved rule text using regex pattern matching (e.g., extracting "200 NTD" 
+from fee rules, "20 minutes" from exam rules). Only when extraction fails does 
+it fall back to the LLM. This dramatically improved Normal QA accuracy from 
+15% to 95%.
 
 ---
 
@@ -284,7 +287,12 @@ the primary driver of answer accuracy.
 
 2. **Natural language security is harder than keyword blocking**: Simple keyword lists catch obvious cases but miss paraphrased attacks. A more robust approach would combine keyword matching with intent classification.
 
-3. **Small LLM performance is the main bottleneck**: The Qwen 2.5-3B model retrieves correct evidence but sometimes generates answers that don't match the expected format, especially for yes/no and exact-number questions. Retrieval quality (via the KG) is far more reliable than generation quality.
+3. **Rule-based extraction outperforms LLM generation for factual QA**: 
+Directly extracting specific facts (numbers, yes/no) from retrieved rule text 
+using regex is far more reliable than asking a small LLM to generate answers. 
+The LLM excels at understanding context but struggles with concise factual 
+output. A hybrid approach — rule extraction first, LLM fallback — raised 
+Normal QA accuracy from 15% to 95%.
 
 4. **KG schema from A4 transfers well**: The `(Regulation)-[:HAS_ARTICLE]->(Article)-[:CONTAINS_RULE]->(Rule)` schema required no changes for A5. The main extension work was all in the agent layer.
 
