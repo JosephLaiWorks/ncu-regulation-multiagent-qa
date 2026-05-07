@@ -315,6 +315,7 @@ docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/passwor
 
 ### 2. Activate virtual environment
 ```bash
+python -m venv venv
 venv\Scripts\activate   # Windows
 ```
 
