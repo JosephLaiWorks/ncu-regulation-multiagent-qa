@@ -427,7 +427,7 @@ def main() -> None:
     load_local_llm()
 
     print("=" * 50)
-    print("🎓 NCU Regulation Assistant (Template)")
+    print(" NCU Regulation Assistant (Template)")
     print("=" * 50)
     print("Try: 'What is the penalty for forgetting student ID?'")
     print("Type 'exit' to quit.\n")
