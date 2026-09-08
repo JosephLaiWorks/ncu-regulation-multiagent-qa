@@ -39,59 +39,68 @@ Additional evaluation results:
 
 ## System Architecture
 
-```text
-User Question
-      │
-      ▼
-┌──────────────────────┐
-│ 1. NLU Agent         │
-│ question → intent    │
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│ 2. Security Agent    │
-│ ALLOW / REJECT       │
-└──────────┬───────────┘
-           │ ALLOW
-           ▼
-┌──────────────────────┐
-│ 3. Planner Agent     │
-│ build retrieval plan │
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│ 4. Executor Agent    │
-│ read-only Neo4j      │
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│ 5. Diagnosis Agent   │
-│ classify result      │
-└───────┬──────────────┘
-        │
-   non-SUCCESS?
-      ┌─┴─────────────┐
-      ▼               ▼
-┌──────────────┐   SUCCESS
-│ 6. Repair    │      │
-│ broaden plan │      │
-└──────┬───────┘      │
-       └───────┬──────┘
-               ▼
-      answer extraction
-       or LLM fallback
-               │
-               ▼
-┌──────────────────────┐
-│ 7. Explanation Agent│
-└──────────┬───────────┘
-           ▼
-       Final Output
+```mermaid
+flowchart TD
+    Q[User Question] --> NLU[1. NLU Agent<br/>Question → structured intent]
+    NLU --> SEC[2. Security Agent<br/>ALLOW / REJECT]
+
+    SEC -->|REJECT| RJ[Rejected Response<br/>No KG access]
+    SEC -->|ALLOW| PLAN[3. Planner Agent<br/>Build retrieval plan]
+
+    PLAN --> EXEC[4. Executor Agent<br/>Read-only Neo4j / Cypher]
+    EXEC --> DIAG[5. Diagnosis Agent<br/>SUCCESS / NO_DATA / QUERY_ERROR / SCHEMA_MISMATCH]
+
+    DIAG -->|SUCCESS| ANS[Answer Generation]
+    DIAG -->|Non-SUCCESS| REP[6. Repair Agent<br/>Broaden / simplify query plan]
+
+    REP --> REXEC[Retry Executor<br/>One repair round only]
+    REXEC --> RDIAG[Re-diagnose Result]
+    RDIAG -->|SUCCESS| ANS
+    RDIAG -->|Still failed| FAIL[Failure / No evidence response]
+
+    ANS --> EXT{Deterministic extraction<br/>available?}
+    EXT -->|Yes| FACT[Concise factual answer]
+    EXT -->|No| LLM[LLM fallback]
+    FACT --> EXP[7. Explanation Agent]
+    LLM --> EXP
+    FAIL --> EXP
+    RJ --> EXP
+
+    EXP --> OUT[Final Output<br/>answer + safety_decision + diagnosis<br/>repair_attempted + repair_changed + explanation]
 ```
 
 The pipeline uses a **fixed front half** — understand, validate, plan, execute, diagnose — and a **conditional back half** that triggers at most one repair attempt when retrieval fails.
 
 ---
+
+## Demo & Evaluation Screenshots
+
+### Automated Evaluation Result
+
+![A5 Automated Evaluation Result](images/auto-test-result.jpg)
+
+### Multi-Agent QA — Normal Question
+
+![Normal Question Example](images/Normal-question.jpg)
+
+### Security Agent — Unsafe Request Rejected
+
+![Unsafe Request Rejected](images/UnsafeQ.jpg)
+
+### Diagnosis & Repair Flow
+
+![Repair Triggered](images/Repair.jpg)
+
+### Knowledge Graph Structure
+
+![KG Structure Overview](images/KG-struct-overall.jpg)
+
+### Knowledge Graph Statistics
+
+| Article Nodes | Rule Nodes | Relationships |
+|---|---|---|
+| ![Article Count](images/article-number.jpg) | ![Rule Count](images/rule-number.jpg) | ![Relationship Count](images/contain_row-number.jpg) |
+
 
 ## Agent Responsibilities
 
@@ -179,12 +188,10 @@ Builds a short summary of what happened in the pipeline, including:
 
 The A5 system reuses the KG built in the previous assignment without changing its schema.
 
-```text
-(:Regulation)
-      │
-      └──[:HAS_ARTICLE]──> (:Article)
-                                 │
-                                 └──[:CONTAINS_RULE]──> (:Rule)
+```mermaid
+graph LR
+    R[Regulation] -->|HAS_ARTICLE| A[Article]
+    A -->|CONTAINS_RULE| RULE[Rule]
 ```
 
 ### Main properties
