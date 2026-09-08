@@ -93,7 +93,7 @@ The pipeline uses a **fixed front half** — understand, validate, plan, execute
 
 ### Knowledge Graph Structure
 
-![KG Structure Overview](images/KG-struct-overall.jpg)
+![KG Structure Overview](images/first-KG.jpg)
 
 ### Knowledge Graph Statistics
 
