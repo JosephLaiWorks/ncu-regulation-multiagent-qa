@@ -259,8 +259,12 @@ if diagnosis["label"] != "SUCCESS":
     repaired_execution = executor.run(repaired_plan)
     repaired_diagnosis = diagnosis_agent.run(repaired_execution)
 
+    if repaired_diagnosis["label"] == "SUCCESS":
+        execution = repaired_execution
+        diagnosis = repaired_diagnosis
+
 if diagnosis["label"] == "SUCCESS":
-    answer = deterministic_extractor(...)
+    answer = extract_fact_from_rules(...)
     if answer is None:
         answer = generate_answer(...)
 
