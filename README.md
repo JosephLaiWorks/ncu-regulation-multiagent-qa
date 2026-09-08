@@ -1,360 +1,427 @@
-# Assignment 5: KG Multi-Agent QA System
+# KG Multi-Agent QA System
 
-**Extension of**: Assignment 4 — NCU Regulation KG Q&A System
+A multi-agent question-answering system built on top of a Neo4j knowledge graph of NCU regulations.
+
+This project extends a previous knowledge-graph QA pipeline by adding **security validation, query planning, diagnosis, one-step repair, and explanation** around the original KG retrieval flow. The goal is not only to answer a question, but also to detect unsafe requests and recover from failed or overly strict retrieval.
+
+## Highlights
+
+- 7-agent pipeline for regulation QA
+- Read-only Neo4j / Cypher retrieval
+- Security validation before KG access
+- Diagnosis states: `SUCCESS`, `NO_DATA`, `QUERY_ERROR`, `SCHEMA_MISMATCH`
+- One-round query repair with broader retrieval
+- Hybrid answer generation:
+  - deterministic extraction for concise factual answers
+  - LLM fallback when direct extraction is not applicable
+- Compatible with a fixed automated evaluation contract
+
+### Evaluation
+
+| Metric | Result |
+|---|---:|
+| Task Success Rate | 23.75 / 25 |
+| Security & Validation | 15 / 15 |
+| Error Detection Quality | 8 / 8 |
+| Query Regeneration | 6 / 6 |
+| Correct Resolution After Repair | 6 / 6 |
+| **System Performance** | **58.75 / 60** |
+
+Additional evaluation results:
+
+- Unsafe request rejection: **10 / 10**
+- Failure-handling cases passed: **10 / 10**
+- Diagnosis label validity: **40 / 40**
+- Repair success when attempted: **8 / 8**
+- Normal QA accuracy improved from **15% to 95%** after adding deterministic factual extraction before LLM fallback
 
 ---
 
-## 1. Project Overview
+## System Architecture
 
-This project extends the Assignment 4 Knowledge Graph QA system by introducing a **multi-agent pipeline** built on top of the existing NCU regulation Knowledge Graph (KG).
-
-The system processes a user question through 7 specialized agents in sequence:
-
-1. Validates natural language input into structured intent
-2. Rejects unsafe or policy-violating requests
-3. Plans a KG query strategy
-4. Executes a read-only Neo4j query
-5. Diagnoses the result quality
-6. Repairs the query if needed
-7. Produces a grounded answer with a full explanation
-
----
-
-## 2. Architecture Diagram
-
-```
+```text
 User Question
-     │
-     ▼
-┌─────────────────────┐
-│  Agent 1: NLU       │  Parse question → Intent (type, keywords, aspect)
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  Agent 2: Security  │  REJECT unsafe patterns → early exit with REJECT
-└────────┬────────────┘
-         │ ALLOW
-         ▼
-┌─────────────────────┐
-│  Agent 3: Planner   │  Build query plan (terms, strategy, min_score=5)
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  Agent 4: Executor  │  Run READ-ONLY Cypher → rows or empty
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│  Agent 5: Diagnosis │  SUCCESS / NO_DATA / QUERY_ERROR / SCHEMA_MISMATCH
-└────────┬────────────┘
-         │
-    ┌────┴──────────────┐
-    │ non-SUCCESS?      │
-    ▼                   ▼ SUCCESS
-┌──────────┐      ┌───────────────┐
-│ Agent 6  │      │ Generate      │
-│ Repair   │─────▶│ concise       │
-│          │      │ answer (LLM)  │
-└──────────┘      └───────┬───────┘
-(min_score=1)             │
-                          ▼
-                ┌─────────────────────┐
-                │  Agent 7:           │
-                │  Explanation        │
-                └─────────┬───────────┘
-                          │
-                          ▼
-                     Final Output
-         { answer, safety_decision, diagnosis,
-           repair_attempted, repair_changed, explanation }
+      │
+      ▼
+┌──────────────────────┐
+│ 1. NLU Agent         │
+│ question → intent    │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 2. Security Agent    │
+│ ALLOW / REJECT       │
+└──────────┬───────────┘
+           │ ALLOW
+           ▼
+┌──────────────────────┐
+│ 3. Planner Agent     │
+│ build retrieval plan │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 4. Executor Agent    │
+│ read-only Neo4j      │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 5. Diagnosis Agent   │
+│ classify result      │
+└───────┬──────────────┘
+        │
+   non-SUCCESS?
+      ┌─┴─────────────┐
+      ▼               ▼
+┌──────────────┐   SUCCESS
+│ 6. Repair    │      │
+│ broaden plan │      │
+└──────┬───────┘      │
+       └───────┬──────┘
+               ▼
+      answer extraction
+       or LLM fallback
+               │
+               ▼
+┌──────────────────────┐
+│ 7. Explanation Agent│
+└──────────┬───────────┘
+           ▼
+       Final Output
 ```
+
+The pipeline uses a **fixed front half** — understand, validate, plan, execute, diagnose — and a **conditional back half** that triggers at most one repair attempt when retrieval fails.
 
 ---
 
-## 3. Agent Responsibilities
+## Agent Responsibilities
 
-### Agent 1 — NL Understanding (`NLUnderstandingAgent`)
-Converts the raw question into a structured `Intent` object.
+### 1. NL Understanding Agent
 
-- Uses `keyword_variants()` from A4 to extract search terms
-- Uses `detect_question_type()` to classify as: `penalty` / `time` / `yesno` / `general`
-- Detects domain aspect: `exam` / `admin` / `academic` / `general`
-- Flags ambiguous questions (fewer than 2 meaningful keywords)
-- Stores the original question for downstream agents
+Transforms the raw question into structured intent.
 
-### Agent 2 — Security / Policy (`SecurityAgent`)
-Rejects unsafe or policy-violating queries before any KG access.
+It:
 
-Three-layer validation:
-1. **Dangerous Cypher/DB patterns**: `delete`, `drop`, `modify`, `export`, `credentials`, `word-by-word`, `raw json`, `entire kg`, etc.
-2. **Cypher injection heuristic**: Rejects if 3+ Cypher keywords appear together (`match`, `where`, `return`, `with`, `union`)
-3. **Privacy/policy violations**: `all students`, `all records`, `show passwords`, etc.
+- extracts keyword variants
+- classifies question type such as `penalty`, `time`, `yesno`, or `general`
+- detects the domain aspect such as `exam`, `admin`, or `academic`
+- marks underspecified questions as ambiguous
 
-Returns `ALLOW` or `REJECT` with a reason string.
+### 2. Security Agent
 
-### Agent 3 — Query Planning (`QueryPlannerAgent`)
-Converts an `Intent` into a query plan dict.
+Runs before any KG access and rejects unsafe requests.
 
-- Uses `build_match_terms()` from A4 to generate fine-grained match terms
-- Sets `min_score=5` for the first pass (strict mode)
-- Stores `original_question`, `aspect`, `flags`, and `strategy` in the plan
+Checks include:
 
-### Agent 4 — Query Execution (`QueryExecutionAgent`)
-Executes a **read-only** Neo4j Cypher query using the plan's terms and score threshold.
+- dangerous database operations such as `DELETE`, `DROP`, or write-oriented requests
+- possible Cypher injection patterns
+- attempts to extract credentials, bulk records, or the entire KG
 
-- Uses `MATCH (a:Article)-[:CONTAINS_RULE]->(r:Rule)` (read-only)
-- Scores each rule candidate based on keyword overlap with `action`, `result`, `content`, `reg_name`
-- Applies category bonus based on detected aspect (`exam` / `admin` / `general`)
-- Applies `min_score` threshold — strict first pass may return empty for vague questions
-- Returns `rows` (list of matching rules) or an `error` string
+This keeps runtime QA read-only and prevents unsafe requests from reaching the executor.
 
-### Agent 5 — Diagnosis (`DiagnosisAgent`)
-Classifies the execution result into one of four states:
+### 3. Query Planner Agent
 
-| Label | Condition |
+Converts the structured intent into a retrieval plan.
+
+The first pass uses a relatively strict score threshold (`min_score=5`) so that weak matches can fail explicitly instead of being incorrectly treated as successful retrieval.
+
+### 4. Query Execution Agent
+
+Executes a read-only Cypher query against the regulation KG.
+
+The executor:
+
+- retrieves `Article` → `Rule` candidates
+- scores candidates by overlap with fields such as `action`, `result`, `content`, and `reg_name`
+- applies category/aspect bonuses
+- returns matching rows or an error
+
+Runtime access does not use `MERGE`, `CREATE`, `SET`, or `DELETE`.
+
+### 5. Diagnosis Agent
+
+Classifies execution into four states:
+
+| State | Meaning |
 |---|---|
-| `SUCCESS` | Rows returned with no error |
-| `NO_DATA` | No rows, no error (question too vague or non-existent) |
-| `QUERY_ERROR` | Neo4j connection failure or runtime error |
-| `SCHEMA_MISMATCH` | Error involving property names or labels |
+| `SUCCESS` | Valid rows returned |
+| `NO_DATA` | Query ran successfully but no useful rows matched |
+| `QUERY_ERROR` | Runtime / connection failure |
+| `SCHEMA_MISMATCH` | Error related to labels or properties |
 
-### Agent 6 — Query Repair (`QueryRepairAgent`)
-Triggered when diagnosis is non-SUCCESS. Produces a revised plan with `min_score=1` (very permissive) and broadened keywords.
+The diagnosis result determines whether repair should run.
 
-Repair strategy by diagnosis type:
-- `SCHEMA_MISMATCH`: Switch to `fulltext_only`, keep only top-level terms
-- `QUERY_ERROR`: Simplify keywords to top 4, switch to `fulltext_only`
-- `NO_DATA`: Expand keywords using full `keyword_variants()`, lower threshold to 1
+### 6. Query Repair Agent
 
-At most **one repair round** is attempted per question.
+Runs only when the first attempt is not successful.
 
-### Agent 7 — Explanation (`ExplanationAgent`)
-Produces a human-readable pipeline summary string combining:
-- Question type and domain aspect
-- Security decision and reason
-- Diagnosis label and reason
-- Whether repair was attempted
-- Truncated answer preview
+Depending on the diagnosis, it can:
 
----
+- broaden keyword variants
+- simplify the query plan
+- switch to a more permissive retrieval strategy
+- lower the score threshold from `5` to `1`
 
-## 4. A4 → A5 Continuity
+Only one repair round is allowed to keep the behavior predictable.
 
-This system is built **directly on top of** the A4 KG without modifying its structure.
+### 7. Explanation Agent
 
-| A4 Component | Role in A5 |
-|---|---|
-| `build_kg.py` | Unchanged — builds the same KG |
-| `query_system.py` | Reused — `keyword_variants`, `build_match_terms`, `detect_question_type`, `generate_text` |
-| `ncu_regulations.db` | Unchanged data source |
-| Neo4j schema | Unchanged: `(Regulation)-[:HAS_ARTICLE]->(Article)-[:CONTAINS_RULE]->(Rule)` |
+Builds a short summary of what happened in the pipeline, including:
 
-Runtime QA is **strictly read-only** on the KG — no MERGE, CREATE, SET, or DELETE operations.
+- question type / domain
+- security decision
+- diagnosis
+- whether repair was attempted
+- final answer preview
 
 ---
 
-## 5. KG Schema (from A4)
+## Knowledge Graph
 
+The A5 system reuses the KG built in the previous assignment without changing its schema.
+
+```text
+(:Regulation)
+      │
+      └──[:HAS_ARTICLE]──> (:Article)
+                                 │
+                                 └──[:CONTAINS_RULE]──> (:Rule)
 ```
-(:Regulation)-[:HAS_ARTICLE]->(:Article)-[:CONTAINS_RULE]->(:Rule)
-```
 
-### Node properties
+### Main properties
 
-**Regulation**: `id`, `name`, `category`  
-**Article**: `number`, `content`, `reg_name`, `category`  
-**Rule**: `rule_id`, `type`, `action`, `result`, `art_ref`, `reg_name`
+**Regulation**
+- `id`
+- `name`
+- `category`
 
-### Graph statistics
+**Article**
+- `number`
+- `content`
+- `reg_name`
+- `category`
+
+**Rule**
+- `rule_id`
+- `type`
+- `action`
+- `result`
+- `art_ref`
+- `reg_name`
+
+### Graph size
 
 | Item | Count |
-|---|---|
+|---|---:|
 | Article nodes | 159 |
 | Rule nodes | 199 |
-| CONTAINS_RULE relationships | 199 |
-| Article coverage | 159 / 159 (100%) |
-
-*(Screenshots in Section 8)*
+| `CONTAINS_RULE` relationships | 199 |
+| Article coverage | 159 / 159 |
 
 ---
 
-## 6. Output Contract
+## Main Runtime Flow
 
-`query_system_multiagent.py` exposes three compatible callables:
-- `answer_question(question)`
-- `run_multiagent_qa(question)`
-- `run_qa(question)`
+The main entry point is `answer_question()` in `query_system_multiagent.py`.
 
-All return the same dict:
+Simplified flow:
+
+```python
+intent = nlu.run(question)
+security = security_agent.run(question, intent)
+
+if security["decision"] == "REJECT":
+    return rejected_result
+
+plan = planner.run(intent)
+execution = executor.run(plan)
+diagnosis = diagnosis_agent.run(execution)
+
+if diagnosis["label"] != "SUCCESS":
+    repaired_plan = repair_agent.run(diagnosis, plan, intent)
+    repaired_execution = executor.run(repaired_plan)
+    repaired_diagnosis = diagnosis_agent.run(repaired_execution)
+
+if diagnosis["label"] == "SUCCESS":
+    answer = deterministic_extractor(...)
+    if answer is None:
+        answer = generate_answer(...)
+
+return final_result
+```
+
+Returned object:
 
 ```python
 {
-    "answer":           str,           # grounded answer or rejection message
-    "safety_decision":  "ALLOW" | "REJECT",
-    "diagnosis":        "SUCCESS" | "QUERY_ERROR" | "SCHEMA_MISMATCH" | "NO_DATA",
+    "answer": str,
+    "safety_decision": "ALLOW" | "REJECT",
+    "diagnosis": "SUCCESS" | "QUERY_ERROR" | "SCHEMA_MISMATCH" | "NO_DATA",
     "repair_attempted": bool,
-    "repair_changed":   bool,
-    "explanation":      str,
+    "repair_changed": bool,
+    "explanation": str,
 }
 ```
 
 ---
 
-## 7. Evaluation Results
+## Key Engineering Decisions
 
-### System Performance (auto_test_a5.py)
+### 1. Strict first pass, broad repair pass
 
-| Metric | Score |
-|---|---|
-| Task Success Rate | 23.75 / 25 |
-| Security & Validation | **15.00 / 15** |
-| Error Detection Quality | **8.00 / 8** |
-| Query Regeneration | **6.00 / 6** |
-| Correct Resolution After Repair | **6.00 / 6** |
-| **System Performance Subtotal** | **58.75 / 60** |
+A broad retriever can almost always return *something*, which makes failure detection meaningless.
 
-### Key rates
+To make the diagnosis/repair path real, the first query uses a stricter threshold. If the result is too weak, the system produces `NO_DATA` and then retries once using a broader plan.
 
-| Rate | Result |
-|---|---|
-| Unsafe rejection rate | 10/10 (100%) |
-| Failure-handling pass rate | 10/10 (100%) |
-| Diagnosis label validity | 40/40 (100%) |
-| Repair success rate (when attempted) | 8/8 (100%) |
+This creates an observable failure → diagnosis → repair workflow instead of always reporting success.
 
-*(Screenshot in Section 8)*
+### 2. Security validation before retrieval
 
----
+Security checks happen before Neo4j access.
 
-## 8. Screenshots
+This gives the pipeline a clear boundary:
 
-### 8.1 auto_test_a5.py Final Result
-![Final Result](images/auto-test-result.jpg)
+```text
+unsafe request → REJECT → no KG query
+safe request   → ALLOW  → continue pipeline
+```
 
-### 8.2 KG Structure Overview (from A4)
-![KG Structure Overview](images/KG-struct-overall.jpg)
+### 3. Hybrid factual answering
 
-### 8.3 Article and Rule Node Counts (from A4)
-![Article and Rule Node Counts](images/article-number.jpg)
-![Article and Rule Node Counts](images/rule-number.jpg)
-![Article and Rule Node Counts](images/contain_row-number.jpg)
+The original LLM-generated answers were often more verbose than the benchmark expected.
 
-### 8.4 Multi-Agent QA — Normal Question Example
-![Multi-Agent QA](images/Normal-question.jpg)
+To improve factual QA, the system first tries deterministic extraction for short answers such as:
 
-### 8.5 Multi-Agent QA — Unsafe Question Rejected
-![Unsafe Question](images/UnsafeQ.jpg)
+- scores
+- fees
+- durations
+- yes/no outcomes
 
-### 8.6 Multi-Agent QA — Repair Triggered
-![Repair Triggered](images/Repair.jpg)
+If no supported extraction rule applies, the system falls back to the LLM.
+
+This improved normal-question accuracy from **15% to 95%** in the provided evaluation.
 
 ---
 
-## 9. Challenges and How They Were Addressed
+## Challenges
 
-### Challenge 1: Repair mechanism never triggered
-**Problem**: The first-pass executor always called `get_relevant_articles()` from A4, which does broad keyword matching and almost always returns results. This meant `diagnosis` was always `SUCCESS` and repair was never triggered.
+### Repair initially never triggered
 
-**Solution**: Replaced the executor with a direct Cypher query using a `min_score` threshold (set to 5 for the first pass). Vague or impossible questions (e.g., referencing non-existent "Article 999") fail to meet the threshold → `NO_DATA` → repair triggers with `min_score=1` → broader search succeeds.
+The original A4 retrieval behavior was broad enough that almost every question returned some rows. As a result, diagnosis frequently reported `SUCCESS`, even for weak matches.
 
-### Challenge 2: Security gaps — 4 unsafe queries not rejected
-**Problem**: The initial Security Agent only blocked obvious Cypher keywords (`delete`, `drop`, `merge`). Four test cases used natural language attack patterns that slipped through.
+**Fix:** added a stricter first-pass score threshold and a lower threshold only during repair.
 
-**Solution**: Extended `BLOCKED_CYPHER` with additional patterns found by analyzing failed cases:
-- `"modify"` for write intent
-- `"export"` / `"raw json"` / `"entire kg"` for data exfiltration
-- `"word-by-word"` for bulk content extraction
-- `"credentials"` / `"query neo4j"` for credential theft
+### Natural-language security cases bypassed simple checks
 
-### Challenge 3: LLM generates verbose answers
-**Problem**: The A4 `generate_answer()` prompt produces multi-sentence explanations. The test's token-overlap matching penalizes verbose answers against short expected answers like `"20 minutes."` or `"200 NTD."`.
+Blocking only obvious database keywords was insufficient because unsafe intent can be written in normal language.
 
-**Solution**: Created a rule-based answer extractor `_extract_answer_from_rules()` 
-in `query_system_multiagent.py`. Instead of relying on the LLM for all answers, 
-the system first attempts to extract concise factual answers directly from 
-retrieved rule text using regex pattern matching (e.g., extracting "200 NTD" 
-from fee rules, "20 minutes" from exam rules). Only when extraction fails does 
-it fall back to the LLM. This dramatically improved Normal QA accuracy from 
-15% to 95%.
+**Fix:** extended validation to cover write intent, bulk extraction, credential access, and injection-like keyword combinations.
+
+### Concise QA was difficult with LLM-only generation
+
+The benchmark expects short factual outputs, while the LLM often generated unnecessary explanation.
+
+**Fix:** added deterministic extraction before the LLM fallback.
 
 ---
 
-## 10. Key Findings
+## Tech Stack
 
-1. **Strict-then-broad is the right repair design**: Using a score threshold in the first pass makes the repair mechanism meaningful. Without it, the system appears to always succeed and the repair agent is never useful.
-
-2. **Natural language security is harder than keyword blocking**: Simple keyword lists catch obvious cases but miss paraphrased attacks. A more robust approach would combine keyword matching with intent classification.
-
-3. **Rule-based extraction outperforms LLM generation for factual QA**: 
-Directly extracting specific facts (numbers, yes/no) from retrieved rule text 
-using regex is far more reliable than asking a small LLM to generate answers. 
-The LLM excels at understanding context but struggles with concise factual 
-output. A hybrid approach — rule extraction first, LLM fallback — raised 
-Normal QA accuracy from 15% to 95%.
-
-4. **KG schema from A4 transfers well**: The `(Regulation)-[:HAS_ARTICLE]->(Article)-[:CONTAINS_RULE]->(Rule)` schema required no changes for A5. The main extension work was all in the agent layer.
-
----
-
-## 11. How to Run
-
-### Prerequisites
 - Python 3.11
-- Docker Desktop
+- Neo4j
+- Cypher
+- Docker
+- SQLite
+- Hugging Face local LLM pipeline
+- Regex / rule-based extraction
+
+---
+
+## Project Structure
+
+```text
+Assignment-5/
+├── README.md
+├── query_system_multiagent.py     # main A5 pipeline entry point
+├── agents/
+│   └── a5_template.py             # 7 agent implementations
+├── auto_test_a5.py                # automated evaluator
+├── test_data_a5.json              # benchmark cases
+├── build_kg.py                    # KG builder inherited from A4
+├── query_system.py                # A4 retrieval / generation helpers
+├── llm_loader.py                  # local model loader
+├── ncu_regulations.db
+├── requirements.txt
+└── source/
+```
+
+---
+
+## How to Run
 
 ### 1. Start Neo4j
+
 ```bash
 docker start neo4j
 ```
+
 If the container does not exist yet:
+
 ```bash
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest
+docker run -d --name neo4j \
+  -p 7474:7474 \
+  -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:latest
 ```
 
-### 2. Activate virtual environment
+### 2. Create and activate a virtual environment
+
 ```bash
 python -m venv venv
-venv\Scripts\activate   # Windows
+```
+
+Windows:
+
+```bash
+venv\Scripts\activate
 ```
 
 ### 3. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Build the KG (first time only)
+### 4. Build the KG
+
 ```bash
 python build_kg.py
 ```
 
 ### 5. Run evaluation
+
 ```bash
 python auto_test_a5.py
 ```
 
-### 6. Interactive Q&A (optional)
+### 6. Run interactive QA
+
 ```bash
 python query_system_multiagent.py
 ```
 
 ---
 
-## 12. File Structure
+## What I Learned
 
-```
-Assignment-5/
-├── README.md
-├── query_system_multiagent.py    # A5 main multi-agent entry point
-├── agents/
-│   └── a5_template.py            # 7 agent implementations
-├── auto_test_a5.py               # TA-provided evaluator (unmodified)
-├── test_data_a5.json             # TA-provided benchmark dataset
-├── build_kg.py                   # A4 KG builder (unchanged)
-├── query_system.py               # A4 query helpers (reused by agents)
-├── llm_loader.py                 # Local Hugging Face model loader
-├── ncu_regulations.db            # Pre-built SQLite regulation database
-├── requirements.txt
-└── source/                       # Original regulation PDF source files
-```
+This project helped me understand that a practical AI QA system needs more than a single LLM call.
+
+The main lessons were:
+
+- separate language understanding, retrieval, validation, and recovery responsibilities
+- make failures explicit instead of hiding them behind weak retrieval results
+- use deterministic logic when the expected output is structured and factual
+- use LLM generation only where it adds value
+- keep database access constrained and observable
+
+The project also showed how an existing KG system can be extended without redesigning the underlying graph: most of the A5 work is in orchestration, validation, diagnosis, and repair around the A4 retrieval layer.
